@@ -24,7 +24,7 @@ public protocol ConnectionFactory {
 }
 
 public protocol PoolFactory {
-    func pool(url:String, params:Dictionary<String, String>) -> ConnectionPool
+    func pool(url:String, params:Dictionary<String, String>) throws -> ConnectionPool
 }
 
 public extension ConnectionFactory {
@@ -34,8 +34,8 @@ public extension ConnectionFactory {
 }
 
 public extension PoolFactory {
-    func pool(url:String) -> ConnectionPool {
-        return pool(url: url, params: [:])
+    func pool(url:String) throws -> ConnectionPool {
+        return try pool(url: url, params: [:])
     }
 }
 
@@ -52,8 +52,18 @@ public extension ResultSet {
         }
     }
     
-    public func all() -> Future<[Row]> {
+    public func rows() -> Future<[Row]> {
         return accumulate(rows: [Row]())
+    }
+    
+    public func dictionaries() -> Future<[[String: Any?]]> {
+        return columns.flatMap { cols in
+            self.rows().map { rows in
+                rows.map { row in
+                    cols.zipWith(other: row).map(tuple).dictionary
+                }
+            }
+        }
     }
 }
 
@@ -68,6 +78,11 @@ public class ConnectionPool : Connection {
         return _connectionFactory().flatMap { connection in
             connection.execute(query: query, parameters: parameters, named: named)
         }
+    }
+    
+    public func connection() -> Future<(Connection, ()->())> {
+        //TODO: reclaim connection
+        return _connectionFactory().map { ($0, {}) }
     }
 }
 
@@ -84,8 +99,7 @@ public class RDBC : ConnectionFactory, PoolFactory {
     }
     
     public func register(driver: SyncDriver) {
-        let driver = AsyncDriver(driver: driver, contextFactory: _contextFactory)
-        register(driver: driver)
+        register(driver: AsyncDriver(driver: driver, contextFactory: _contextFactory))
     }
     
     public func pool(url:String, params:Dictionary<String, String>) -> ConnectionPool {
@@ -94,19 +108,27 @@ public class RDBC : ConnectionFactory, PoolFactory {
         }
     }
     
-    public func connect(url _url: String, params: Dictionary<String, String>) -> Future<Connection> {
+    public func driver(url _url: String, params: Dictionary<String, String>) throws -> Driver {
         guard let url = URL(string: _url) else {
-            return Future(error: RDBCFrameworkError.invalid(url: _url))
+            throw RDBCFrameworkError.invalid(url: _url)
         }
         
         guard let proto = url.scheme else {
-            return Future(error: RDBCFrameworkError.noProtocol)
+            throw RDBCFrameworkError.noProtocol
         }
         
         guard let driver = _drivers[proto] else {
-            return Future(error: RDBCFrameworkError.unknown(protocol: proto))
+            throw RDBCFrameworkError.unknown(protocol: proto)
         }
         
-        return driver.connect(url: _url, params: params)
+        return driver
+    }
+    
+    public func connect(url: String, params: Dictionary<String, String>) -> Future<Connection> {
+        return future(context: _contextFactory()) {
+            try self.driver(url: url, params: params)
+        }.flatMap { driver in
+            driver.connect(url: url, params: params)
+        }
     }
 }
