@@ -16,9 +16,15 @@
 
 import Future
 
-public protocol Driver : ConnectionFactory {
+public protocol DriverSettings {
     //can be mysql:// pgsql:// or whatever
     var proto:String {get}
+    
+    var poolSizeLimit: UInt {get}
+    var poolSizeRecommended: UInt {get}
+}
+
+public protocol Driver : DriverSettings, ConnectionFactory {
 }
 
 public protocol Connection {

@@ -14,9 +14,7 @@
 //limitations under the License.
 //===----------------------------------------------------------------------===//
 
-public protocol SyncDriver {
-    var proto:String {get}
-    
+public protocol SyncDriver : DriverSettings {
     func connect(url:String, params:Dictionary<String, String>) throws -> SyncConnection
 }
 
