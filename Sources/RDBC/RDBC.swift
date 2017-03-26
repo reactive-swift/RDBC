@@ -19,6 +19,64 @@ import Boilerplate
 import ExecutionContext
 import Future
 
+private let _reserve: UInt = 1024
+
+public class ResourcePool<Res> : Sequence, ExecutionContextTenantProtocol {
+    public typealias Iterator = AnyIterator<Future<Res>>
+    
+    public let context: ExecutionContextProtocol
+    
+    private var _limit: UInt
+    private let _factory: ()->Future<Res>
+    
+    private var _cache: [Res]
+    private var _queue: [Promise<Res>]
+    
+    public init(context: ExecutionContextProtocol, limit: UInt = UInt.max, factory: @escaping ()->Future<Res>) {
+        self.context = context //.serial
+        self._limit = limit
+        self._factory = factory
+        
+        self._cache = Array()
+        self._queue = Array()
+        
+        _cache.reserveCapacity(Int([limit, _reserve].min()!))
+        _queue.reserveCapacity(Int([limit * 2, _reserve].min()!))
+    }
+    
+    public func reclaim(resource: Res) {
+        context.async {
+            guard !self._queue.isEmpty, let waiting = Optional(self._queue.removeFirst()) else {
+                self._cache.append(resource)
+                return
+            }
+            
+            try waiting.success(value: resource)
+        }
+    }
+    
+    public func makeIterator() -> Iterator {
+        let context = self.context
+        return Iterator {
+            future(context: context) { () -> Future<Res> in
+                if !self._cache.isEmpty, let cached = Optional(self._cache.removeFirst()) {
+                    return Future<Res>(value: cached)
+                }
+                
+                guard self._limit <= 0 else {
+                    self._limit -= 1
+                    return self._factory()
+                }
+                
+                let promise = Promise<Res>(context: context)
+                self._queue.append(promise)
+                
+                return promise.future
+            }
+        }
+    }
+}
+
 public protocol ConnectionFactory {
     func connect(url:String, params:Dictionary<String, String>) -> Future<Connection>
 }
@@ -68,25 +126,34 @@ public extension ResultSet {
 }
 
 public class ConnectionPool : Connection {
-    private let _connectionFactory:()->Future<Connection>
+    private let _rp: ResourcePool<Connection>
+    private let _pool: ResourcePool<Connection>.Iterator
     
-    public init(connectionFactory:@escaping ()->Future<Connection>) {
-        _connectionFactory = connectionFactory
+    public init(size: UInt, connectionFactory:@escaping ()->Future<Connection>) {
+        _rp = ResourcePool(context: ExecutionContext(kind: .serial), limit: size, factory: connectionFactory)
+        _pool = _rp.makeIterator()
     }
     
     public func execute(query: String, parameters: [Any?], named: [String : Any?]) -> Future<ResultSet?> {
-        return _connectionFactory().flatMap { connection in
-            connection.execute(query: query, parameters: parameters, named: named)
+        return connection().flatMap { (connection, release) in
+            connection.execute(query: query, parameters: parameters, named: named).onComplete { _ in
+                release()
+            }
         }
     }
     
+    //returns (connection, release)
     public func connection() -> Future<(Connection, ()->())> {
-        //TODO: reclaim connection
-        return _connectionFactory().map { ($0, {}) }
+        let rp = _rp
+        return _pool.next()!.map { connection in
+            (connection, {rp.reclaim(resource: connection)})
+        }
     }
 }
 
 public class RDBC : ConnectionFactory, PoolFactory {
+    public static let POOL_SIZE = "_k_poolSize"
+    
     private var _drivers = [String:Driver]()
     private let _contextFactory:()->ExecutionContextProtocol
     
@@ -102,9 +169,15 @@ public class RDBC : ConnectionFactory, PoolFactory {
         register(driver: AsyncDriver(driver: driver, contextFactory: _contextFactory))
     }
     
-    public func pool(url:String, params:Dictionary<String, String>) -> ConnectionPool {
-        return ConnectionPool {
-            self.connect(url: url, params: params)
+    public func pool(url:String, params:Dictionary<String, String>) throws -> ConnectionPool {
+        let driver = try self.driver(url: url, params: params)
+        
+        let poolSize = params[RDBC.POOL_SIZE].flatMap {UInt($0)}.flatMap { size in
+            [driver.poolSizeLimit, size].max()
+        } ?? driver.poolSizeRecommended
+        
+        return ConnectionPool(size: poolSize) {
+            driver.connect(url: url, params: params)
         }
     }
     

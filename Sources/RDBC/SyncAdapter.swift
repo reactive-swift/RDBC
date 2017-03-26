@@ -30,6 +30,14 @@ class AsyncDriver : Driver {
         return _driver.proto
     }
     
+    var poolSizeLimit: UInt {
+        return _driver.poolSizeLimit
+    }
+    
+    var poolSizeRecommended: UInt {
+        return _driver.poolSizeRecommended
+    }
+    
     func connect(url:String, params:Dictionary<String, String>) -> Future<Connection> {
         let context = _contextFactory()
         let driver = _driver

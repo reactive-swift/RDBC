@@ -39,5 +39,21 @@ class PoolTests: XCTestCase {
         return try rdbc.pool(url: "ms://memory")
     }()
     
-    
+    func testConcurrent() {
+        var counter = 0
+        
+        (0..<1000).forEach { n in
+            let exp = self.expectation(description: "exp: \(n)")
+            
+            pool.execute(query: "", parameters: [], named: [:]).onComplete { _ in
+                XCTAssertEqual(n, counter)
+                
+                counter = counter.advanced(by: 1)
+                
+                exp.fulfill()
+            }
+        }
+        
+        self.waitForExpectations(timeout: 1, handler: nil)
+    }
 }

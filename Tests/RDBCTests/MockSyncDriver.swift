@@ -55,7 +55,7 @@ class MSResultSet: SyncResultSet {
     }
     
     func next() throws -> [Any?]? {
-        _pos += _pos.advanced(by: 1)
+        _pos = _pos.advanced(by: 1)
         return _pos < _data.count ? _data[_pos] : nil
     }
 }
@@ -70,6 +70,9 @@ class MSConnection: SyncConnection {
 
 class MSDriver: SyncDriver {
     let proto: String = "ms"
+    
+    let poolSizeLimit: UInt = 1
+    var poolSizeRecommended: UInt = 1
     
     func connect(url:String, params:Dictionary<String, String>) throws -> SyncConnection {
         return MSConnection()
