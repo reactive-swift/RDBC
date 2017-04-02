@@ -57,3 +57,13 @@ class PoolTests: XCTestCase {
         self.waitForExpectations(timeout: 1, handler: nil)
     }
 }
+
+#if os(Linux)
+extension PoolTests {
+	static var allTests : [(String, (PoolTests) -> () throws -> Void)] {
+		return [
+			("testConcurrent", testConcurrent),
+		]
+	}
+}
+#endif
